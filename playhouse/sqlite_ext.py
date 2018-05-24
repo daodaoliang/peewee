@@ -5,7 +5,7 @@ import struct
 import sys
 
 from peewee import *
-from peewee import Alias
+from peewee import ColumnBase
 from peewee import EnclosedNodeList
 from peewee import Entity
 from peewee import Expression
@@ -73,7 +73,7 @@ class AutoIncrementField(AutoField):
         return NodeList((node_list, SQL('AUTOINCREMENT')))
 
 
-class JSONPath(Node):
+class JSONPath(ColumnBase):
     def __init__(self, path=None):
         self._path = path or []
 
@@ -88,6 +88,24 @@ class JSONPath(Node):
 
     def __sql__(self, ctx):
         return ctx.sql(Value('$%s' % ''.join(self._path)))
+
+class ExtractedPath(ColumnBase):
+    def __init__(self, field, path=None):
+        self.field = field
+        self._path = path or []
+
+    def __getitem__(self, idx):
+        path = list(self._path)
+        if isinstance(idx, int):
+            path.append('[%s]' % idx)
+        else:
+            path.append('.%s' % idx)
+        return ExtractedPath(self.field, path)
+    __getattr__ = __getitem__
+
+    def __sql__(self, ctx):
+        return ctx.sql(fn.json_extract(self.field,
+                                       Value('$%s' % ''.join(self._path))))
 
 J = JSONPath()
 
@@ -124,9 +142,8 @@ class JSONField(TextField):
         return fn.json_extract(self, *self.clean_paths(paths))
 
     def __getitem__(self, path):
-        if not isinstance(path, tuple):
-            path = (path,)
-        return self.extract(*path)
+        path_obj = ExtractedPath(self)
+        return path_obj[path]
 
     def _value_for_insertion(self, value):
         if isinstance(value, (list, tuple, dict)):
